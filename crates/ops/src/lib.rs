@@ -15,9 +15,9 @@ use std::sync::Arc;
 
 use photocraft_doc::{Document, LayerId};
 
-/// The layers a state targeted when it was created: the active ("key") layer and every selected
-/// layer. Undo and redo bring them back with the state's document, as the reference app does;
-/// selecting layers is not a step of its own, so it doesn't change a state's target.
+/// The target associated with a document snapshot: its active ("key") layer and every selected
+/// layer. Selection alone remains view state; when a new edit begins, the engine captures the
+/// live target for the before-snapshot. Undo and redo restore that target with the document.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LayerTarget {
     pub active: Option<LayerId>,
@@ -28,7 +28,7 @@ pub struct LayerTarget {
 pub struct HistoryState {
     pub label: String,
     pub doc: Arc<Document>,
-    /// The layers targeted when this state was created.
+    /// The target captured for this snapshot when it was opened or before its next edit.
     pub layers: LayerTarget,
 }
 
@@ -43,7 +43,7 @@ pub struct History {
     pub max_bytes: usize,
     /// Label of the step that produced the current document.
     current_label: String,
-    /// The layers targeted when the current document was created (opened or edited).
+    /// The target associated with the current document snapshot.
     current_layers: LayerTarget,
 }
 
@@ -66,7 +66,7 @@ impl History {
     }
 
     /// Record that `before` was replaced by a new current document via step `label`, which left
-    /// `layers` targeted.
+    /// `layers` targeted. The existing current target is stored with `before`.
     pub fn record(&mut self, label: impl Into<String>, before: Arc<Document>, layers: LayerTarget) {
         let prev_label = std::mem::replace(&mut self.current_label, label.into());
         let prev_layers = std::mem::replace(&mut self.current_layers, layers);
@@ -94,8 +94,9 @@ impl History {
         self.redo.iter().rev().map(|s| s.label.as_str())
     }
 
-    /// Set the layers the current document targets from its creation on: when it is first
-    /// opened, or when its step coalesces or changes the selection after recording.
+    /// Set the target associated with the current document. The engine sets this to the live
+    /// target at a new edit's transaction boundary, or to the post-edit target after a coalesced
+    /// edit. Changing selection alone does not call this method.
     pub fn set_current_layers(&mut self, layers: LayerTarget) {
         self.current_layers = layers;
     }

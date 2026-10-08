@@ -243,9 +243,6 @@ pub fn move_to(s: &mut Session, p: &Value) -> Result<Value> {
     }
 
     let legacy_active = roots.last().copied();
-    if explicit && let Some(state) = s.active_mut() {
-        state.history.set_current_layers(photocraft_ops::LayerTarget { active: state.active_layer, selected: state.selected_layers.clone() });
-    }
     s.edit("Reorder Layers", |doc, active| {
         *doc = after;
         if !explicit {
@@ -1406,7 +1403,13 @@ mod tests {
             assert_eq!(sel(&s), vec![m]);
             s.undo();
             assert_eq!(doc(&s).layer_count(), before);
-            assert_eq!(sel(&s), vec![c], "undo leaves a valid selection");
+            assert_eq!(s.active().unwrap().active_layer, Some(c));
+            assert_eq!(sel(&s), vec![a, c], "undo restores the full selection that was merged");
+            s.redo();
+            assert_eq!(s.active().unwrap().active_layer, Some(m));
+            assert_eq!(sel(&s), vec![m], "redo restores the merged layer target");
+            s.undo();
+            s.execute("layer.select", json!({"layer": c.0})).unwrap();
             // One layer selected: Merge Down.
             s.execute("layer.mergeLayers", json!({})).unwrap();
             assert_eq!(doc(&s).layer_count(), before - 1);

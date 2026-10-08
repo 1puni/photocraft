@@ -230,6 +230,83 @@ fn undo_and_redo_restore_the_targeted_layers() {
 }
 
 #[test]
+fn an_edit_records_the_live_single_layer_target_before_editing() {
+    let mut s = session_with_doc();
+    let a = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let b = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let target = |s: &Session| {
+        let state = s.active().unwrap();
+        (state.active_layer, state.selected_layers())
+    };
+
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    assert!(s.undo());
+    assert_eq!(target(&s), (Some(a), vec![a]), "undo restores the target at edit start");
+    assert_eq!(s.active().unwrap().doc.layer(a).unwrap().opacity, 1.0);
+    assert!(s.redo());
+    assert_eq!(target(&s), (Some(a), vec![a]), "selection after the edit does not replace its recorded target");
+    assert_eq!(s.active().unwrap().doc.layer(a).unwrap().opacity, 0.5);
+}
+
+#[test]
+fn an_edit_records_the_live_multiselection_before_editing() {
+    let mut s = session_with_doc();
+    let a = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let b = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.select", json!({"layer": b.0, "mode": "toggle"})).unwrap();
+    s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    assert!(s.undo());
+    let state = s.active().unwrap();
+    assert_eq!(state.active_layer, Some(b));
+    assert_eq!(state.selected_layers(), vec![a, b]);
+    assert!(s.redo());
+    let state = s.active().unwrap();
+    assert_eq!(state.active_layer, Some(b));
+    assert_eq!(state.selected_layers(), vec![a, b]);
+}
+
+#[test]
+fn coalesced_edits_keep_the_first_pre_edit_target() {
+    let mut s = session_with_doc();
+    let a = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let b = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.setProps", json!({"opacity": 0.8, "coalesce": "opacity-drag"})).unwrap();
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    s.execute("layer.setProps", json!({"opacity": 0.6, "coalesce": "opacity-drag"})).unwrap();
+
+    assert!(s.undo());
+    let state = s.active().unwrap();
+    assert_eq!(state.active_layer, Some(a), "later coalesced edits cannot replace the gesture's first target");
+    assert_eq!(state.doc.layer(a).unwrap().opacity, 1.0);
+    assert!(s.redo());
+    let state = s.active().unwrap();
+    assert_eq!(state.active_layer, Some(b), "redo restores the final coalesced target");
+    assert_eq!(state.doc.layer(a).unwrap().opacity, 0.8);
+}
+
+#[test]
+fn failed_edits_do_not_change_the_history_target() {
+    let mut s = session_with_doc();
+    let a = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    let b = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.setProps", json!({"opacity": 0.5})).unwrap();
+    s.execute("layer.select", json!({"layer": b.0})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    assert!(s.execute("layer.setProps", json!({"blend": "not-a-blend"})).is_err());
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+    assert!(s.undo());
+    assert_eq!(s.active().unwrap().active_layer, Some(a));
+    assert!(s.redo());
+    assert_eq!(s.active().unwrap().active_layer, Some(a));
+}
+
+#[test]
 fn selection_modes() {
     let mut s = session_with_doc();
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();

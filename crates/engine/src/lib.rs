@@ -438,6 +438,7 @@ impl Session {
         let restrict = self.color_restrict;
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let before = st.doc.clone();
+        let before_layers = st.layer_target();
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
@@ -452,6 +453,7 @@ impl Session {
         let st = self.active_mut().ok_or(EngineError::NoDocument)?;
         let layers = st.layer_target();
         if key.is_none() || st.coalesce != key || !st.history.can_undo() {
+            st.history.set_current_layers(before_layers);
             st.history.record(label, before, layers);
             st.history.trim(&st.doc);
         } else {
