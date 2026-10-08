@@ -126,7 +126,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let font = theme::medium(12.5);
     let galley = ui.painter().layout_no_wrap(tl!(label).to_owned(), font, t.text);
-    let size = vec2(galley.size().x + 20.0, 24.0);
+    let size = vec2(galley.size().x + 20.0, crate::touch_ui::height(ui, 24.0));
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if selected {
         surface(ui, rect, t.hover, true);
@@ -144,7 +144,7 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
 /// Monospace numeric field with a dimmed unit suffix, Photoshop style. Drag to scrub.
 pub fn value_field(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, suffix: &str, width: f32) -> Response {
     let t = Tokens::get(ui.ctx());
-    let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+    let (rect, _) = ui.allocate_exact_size(vec2(width, crate::touch_ui::height(ui, 24.0)), Sense::hover());
     surface(ui, rect, t.field, false);
     if !t.bevel {
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
@@ -211,7 +211,7 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
 pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, gradient: Option<&[Color32]>) -> Response {
     let t = Tokens::get(ui.ctx());
     let width = ui.available_width().max(60.0);
-    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 18.0), Sense::click_and_drag());
+    let (rect, mut resp) = ui.allocate_exact_size(vec2(width, crate::touch_ui::height(ui, 18.0)), Sense::click_and_drag());
     let (lo, hi) = (*range.start(), *range.end());
     let track = Rect::from_center_size(rect.center(), vec2(rect.width() - 14.0, if gradient.is_some() { 5.0 } else { 3.0 }));
     if let Some(p) = resp.interact_pointer_pos()
@@ -291,6 +291,9 @@ pub fn slider_row(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::Ra
 
 /// iOS-style toggle switch.
 pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    if crate::touch_ui::enabled(ui.ctx()) {
+        return ui.add_sized([ui.available_width().min(280.0), 44.0], egui::Checkbox::new(on, tl!(label)));
+    }
     let t = Tokens::get(ui.ctx());
     if t.pro {
         return checkbox(ui, on, label);
@@ -412,7 +415,7 @@ fn button_size(ui: &Ui, label: &str, min_width: f32) -> Vec2 {
 
 fn button_layout(ui: &Ui, label: &str, min_width: f32, fg: Color32) -> (std::sync::Arc<egui::Galley>, Vec2) {
     let galley = ui.painter().layout_no_wrap(tl!(label).to_owned(), theme::medium(13.0), fg);
-    let h = if Tokens::get(ui.ctx()).pro { 28.0 } else { 30.0 };
+    let h = crate::touch_ui::height(ui, if Tokens::get(ui.ctx()).pro { 28.0 } else { 30.0 });
     let size = vec2((galley.size().x + 28.0).max(min_width), h);
     (galley, size)
 }
@@ -605,6 +608,9 @@ pub fn checker(painter: &egui::Painter, rect: Rect, cell: f32) {
 
 /// Spectrum-style checkbox (blue when checked).
 pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
+    if crate::touch_ui::enabled(ui.ctx()) {
+        return ui.add_sized([ui.available_width().min(280.0), 44.0], egui::Checkbox::new(on, tl!(label)));
+    }
     let t = Tokens::get(ui.ctx());
     let mut resp = ui
         .horizontal(|ui| {

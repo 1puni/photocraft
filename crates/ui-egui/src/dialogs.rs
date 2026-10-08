@@ -81,7 +81,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Opens centred, then its top-left stays put (offset from the window's top-left, moved by
         // dragging the title bar; view state only, so egui memory): a dialog whose body grows, like
         // Layer Style switching effects, extends down and right instead of re-centring.
-        let pinned: Option<egui::Vec2> = ctx.data(|m| m.get_temp(id));
+        let touch = crate::touch_ui::enabled(ctx);
+        let pinned: Option<egui::Vec2> = if touch { None } else { ctx.data(|m| m.get_temp(id)) };
         let mut drag = egui::Vec2::ZERO;
         let mut sizing = false;
         let area = match pinned {
@@ -91,31 +92,36 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Photoshop doesn't dim the window behind dialogs: previews must be judged at true contrast.
         let modal = egui::Modal::new(id).area(area).backdrop_color(egui::Color32::TRANSPARENT).show(ctx, |ui| {
             sizing = ui.is_sizing_pass();
-            ui.set_min_width(380.0);
-            let wide = crate::prefs_ui::width(&d.fields);
-            if let Some(w) = wide {
-                ui.set_min_width(w.min(460.0));
-            }
-            if d.kind == DialogKind::NewDocument {
-                ui.set_min_width(800.0);
-            }
-            // The About window: room for the contributor table, the same width on every tab.
-            let about_tabs = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true);
-            if about_tabs {
-                ui.set_min_width(700.0);
-            }
-            ui.set_max_width(wide.unwrap_or(if d.kind == DialogKind::NewDocument {
-                800.0
-            } else if about_tabs {
-                700.0
-            } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
-                600.0
+            let viewport = ctx.content_rect().size();
+            if touch {
+                ui.set_width((viewport.x - 48.0).clamp(240.0, 640.0));
             } else {
-                440.0
-            }));
-            if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
-                ui.set_min_width(w);
-                ui.set_max_width(w);
+                ui.set_min_width(380.0);
+                let wide = crate::prefs_ui::width(&d.fields);
+                if let Some(w) = wide {
+                    ui.set_min_width(w.min(460.0));
+                }
+                if d.kind == DialogKind::NewDocument {
+                    ui.set_min_width(800.0);
+                }
+                // The About window: room for the contributor table, the same width on every tab.
+                let about_tabs = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true);
+                if about_tabs {
+                    ui.set_min_width(700.0);
+                }
+                ui.set_max_width(wide.unwrap_or(if d.kind == DialogKind::NewDocument {
+                    800.0
+                } else if about_tabs {
+                    700.0
+                } else if d.kind == DialogKind::LayerStyle || d.fields.contains_key("__export") || crate::color_picker_ui::owns(&d.fields) {
+                    600.0
+                } else {
+                    440.0
+                }));
+                if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
+                    ui.set_min_width(w);
+                    ui.set_max_width(w);
+                }
             }
             let t = ui.add(egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false)).rect;
             let bar = egui::Rect::from_min_max(t.min, egui::pos2(ui.max_rect().right(), t.bottom()));
@@ -123,74 +129,85 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.add_space(4.0);
             crate::widgets::hairline(ui);
             ui.add_space(8.0);
-            match d.kind {
-                DialogKind::NewDocument => crate::new_doc_ui::body(ui, &mut fields),
-                DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => {
-                    let lines = crate::gpu_status::system_info(app);
-                    for l in &lines {
-                        ui.add(egui::Label::new(egui::RichText::new(l).font(crate::theme::mono(12.0))).selectable(true));
+            let mut body = |ui: &mut egui::Ui| {
+                match d.kind {
+                    DialogKind::NewDocument => crate::new_doc_ui::body(ui, &mut fields),
+                    DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => {
+                        let lines = crate::gpu_status::system_info(app);
+                        for l in &lines {
+                            ui.add(egui::Label::new(egui::RichText::new(l).font(crate::theme::mono(12.0))).selectable(true));
+                        }
+                        ui.add_space(8.0);
+                        if crate::widgets::secondary_button(ui, tl!("Copy"), 84.0).clicked() {
+                            ui.ctx().copy_text(lines.join("\n"));
+                        }
                     }
-                    ui.add_space(8.0);
-                    if crate::widgets::secondary_button(ui, tl!("Copy"), 84.0).clicked() {
-                        ui.ctx().copy_text(lines.join("\n"));
-                    }
-                }
-                DialogKind::About => {
-                    // Tabs About · Contributors · Models (craftrules standards/contributors.md). The
-                    // tab is a dialog field, so automation can switch it with `ui.dialog.set`.
-                    let tab = about_tab(&fields);
-                    let mut chosen = tab;
-                    ui.horizontal(|ui| {
-                        for (key, label) in [("about", tl!("About")), ("contributors", tl!("Contributors")), ("models", tl!("Models"))] {
-                            if crate::widgets::pill_tab(ui, label, tab == key).clicked() {
-                                chosen = key;
+                    DialogKind::About => {
+                        // Tabs About · Contributors · Models (craftrules standards/contributors.md). The
+                        // tab is a dialog field, so automation can switch it with `ui.dialog.set`.
+                        let tab = about_tab(&fields);
+                        let mut chosen = tab;
+                        ui.horizontal(|ui| {
+                            for (key, label) in [("about", tl!("About")), ("contributors", tl!("Contributors")), ("models", tl!("Models"))] {
+                                if crate::widgets::pill_tab(ui, label, tab == key).clicked() {
+                                    chosen = key;
+                                }
+                            }
+                        });
+                        if chosen != tab {
+                            fields.insert("tab".into(), json!(chosen));
+                        }
+                        ui.add_space(8.0);
+                        match chosen {
+                            "contributors" => crate::credits::contributors_ui(ui),
+                            "models" => crate::credits::models_ui(ui),
+                            _ => {
+                                ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
+                                ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
+                                ui.add_space(12.0);
+                                ui.vertical_centered(|ui| {
+                                    crate::links::discord_button(app, ui, 220.0);
+                                    ui.add_space(8.0);
+                                    crate::links::link_row(app, ui);
+                                });
+                                ui.add_space(10.0);
+                                ui.weak("egui · wgpu · photocraft-engine");
                             }
                         }
-                    });
-                    if chosen != tab {
-                        fields.insert("tab".into(), json!(chosen));
                     }
-                    ui.add_space(8.0);
-                    match chosen {
-                        "contributors" => crate::credits::contributors_ui(ui),
-                        "models" => crate::credits::models_ui(ui),
-                        _ => {
-                            ui.label(tl!("PhotoCraft — an open-source, native image editor written in Rust."));
-                            ui.label(crate::i18n::fmt(tl!("Version {version}"), &[("version", &photocraft_engine::build_info::long_version())]));
-                            ui.add_space(12.0);
-                            ui.vertical_centered(|ui| {
-                                crate::links::discord_button(app, ui, 220.0);
-                                ui.add_space(8.0);
-                                crate::links::link_row(app, ui);
-                            });
-                            ui.add_space(10.0);
-                            ui.weak("egui · wgpu · photocraft-engine");
+                    DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
+                    DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
+                    DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
+                    DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
+                    DialogKind::Command if crate::color_picker_ui::owns(&fields) => crate::color_picker_ui::body(ui, &mut fields),
+                    DialogKind::Command if crate::color_range_ui::owns(&fields) => crate::color_range_ui::body(app, ui, &mut fields),
+                    DialogKind::Command if crate::prefs_ui::owns(&fields) => crate::prefs_ui::body(app, ui, &mut fields),
+                    DialogKind::Command if fields.contains_key("__export") => crate::export_dialog::body(app, ui, &mut fields),
+                    DialogKind::Command if fields.contains_key("__sizing") => crate::sizing::body(ui, &mut fields),
+                    DialogKind::Command if crate::adjust_dialog::owns(&fields) => crate::adjust_dialog::body(app, ui, &mut fields),
+                    DialogKind::Command if fields.contains_key("__filter") => {
+                        // Color Settings: the monitor profile in use can change while it is open.
+                        if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
+                            fields.insert("__note".into(), Value::String(crate::monitor_status::note(app)));
                         }
+                        crate::filter_dialog::body(ui, &mut fields)
+                    }
+                    DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
+                    DialogKind::Command => {}
+                    DialogKind::LayerStyle => crate::layer_style::body(app, ui, &mut fields),
+                    DialogKind::Error => {
+                        ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
                     }
                 }
-                DialogKind::Command if crate::fill_ui::owns(&fields) => crate::fill_ui::body(app, ui, &mut fields),
-                DialogKind::Command if crate::rasterize_prompt::owns(&fields) => crate::rasterize_prompt::body(ui, &fields),
-                DialogKind::Command if crate::variables_ui::owns(&fields) => crate::variables_ui::body(app, ui, &mut fields),
-                DialogKind::Command if crate::file_ui::owns(&fields) => crate::file_ui::body(app, ui, &mut fields),
-                DialogKind::Command if crate::color_picker_ui::owns(&fields) => crate::color_picker_ui::body(ui, &mut fields),
-                DialogKind::Command if crate::color_range_ui::owns(&fields) => crate::color_range_ui::body(app, ui, &mut fields),
-                DialogKind::Command if crate::prefs_ui::owns(&fields) => crate::prefs_ui::body(app, ui, &mut fields),
-                DialogKind::Command if fields.contains_key("__export") => crate::export_dialog::body(app, ui, &mut fields),
-                DialogKind::Command if fields.contains_key("__sizing") => crate::sizing::body(ui, &mut fields),
-                DialogKind::Command if crate::adjust_dialog::owns(&fields) => crate::adjust_dialog::body(app, ui, &mut fields),
-                DialogKind::Command if fields.contains_key("__filter") => {
-                    // Color Settings: the monitor profile in use can change while it is open.
-                    if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
-                        fields.insert("__note".into(), Value::String(crate::monitor_status::note(app)));
-                    }
-                    crate::filter_dialog::body(ui, &mut fields)
-                }
-                DialogKind::Command if fields.contains_key("__form") => crate::view_cmds::form_body(ui, &mut fields),
-                DialogKind::Command => {}
-                DialogKind::LayerStyle => crate::layer_style::body(app, ui, &mut fields),
-                DialogKind::Error => {
-                    ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
-                }
+            };
+            if touch {
+                egui::ScrollArea::both()
+                    .id_salt(("touch-dialog-body", d.id))
+                    .max_height((viewport.y - 180.0).max(120.0))
+                    .auto_shrink([false, true])
+                    .show(ui, &mut body);
+            } else {
+                body(ui);
             }
             ui.add_space(8.0);
             // Align::Min, not Center: a centred row fills the height left over from last frame's
@@ -355,6 +372,24 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn touch_new_document_stays_inside_portrait_and_split_view() {
+        for size in [egui::vec2(834.0, 1066.0), egui::vec2(507.0, 768.0)] {
+            let ctx = egui::Context::default();
+            PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            crate::touch_ui::set_enabled(&ctx, true);
+            app.ui.open_dialog(DialogKind::NewDocument, crate::state::UiState::new_document_fields());
+            for _ in 0..4 {
+                let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+                ctx.run_ui(raw, |ui| show(&mut app, ui.ctx())).textures_delta.clear();
+            }
+            for rect in rects(&ctx) {
+                assert!(rect.width() <= size.x && rect.height() <= size.y, "{size:?}: {rect:?}");
+            }
+        }
+    }
 
     #[test]
     fn dragging_the_title_bar_moves_the_dialog() {

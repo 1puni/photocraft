@@ -153,6 +153,10 @@ fn page_icon(ui: &egui::Ui, r: Rect, w: u32, h: u32, t: &Tokens) {
 }
 
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    if crate::touch_ui::enabled(ui.ctx()) {
+        touch_body(ui, f);
+        return;
+    }
     let t = Tokens::get(ui.ctx());
     let cat = get_s(f, "__category", "Recent");
     // Category tabs.
@@ -227,96 +231,125 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         // Right: Preset Details.
         ui.vertical(|ui| {
             ui.set_width(260.0);
-            ui.label(RichText::new(tl!("PRESET DETAILS")).size(11.0).color(t.text_faint));
-            ui.add_space(4.0);
-            let mut name = get_s(f, "name", tl!("Untitled-1"));
-            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0))).changed() {
-                f.insert("name".into(), json!(name));
-            }
-            ui.add_space(8.0);
-            let ppi = get_f(f, "resolution", 72.0);
-            let mut unit = get_s(f, "__unit", "px");
-            small_label(ui, tl!("Width"));
-            ui.horizontal(|ui| {
-                let mut w = to_unit(get_f(f, "width", 1920.0), &unit, ppi);
-                if widgets::value_field(ui, &mut w, 0.01..=300_000.0, "", 110.0).changed() {
-                    f.insert("width".into(), px_value(from_unit(w, &unit, ppi)));
-                    f.remove("__preset");
-                }
-                let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
-                if widgets::dropdown(ui, "nd-unit", &mut unit, &opts, 120.0) {
-                    f.insert("__unit".into(), json!(unit));
-                }
-            });
-            small_label(ui, tl!("Height"));
-            ui.horizontal(|ui| {
-                let mut h = to_unit(get_f(f, "height", 1080.0), &unit, ppi);
-                if widgets::value_field(ui, &mut h, 0.01..=300_000.0, "", 110.0).changed() {
-                    f.insert("height".into(), px_value(from_unit(h, &unit, ppi)));
-                    f.remove("__preset");
-                }
-                ui.add_space(6.0);
-                small_label(ui, tl!("Orientation"));
-                let (w, h) = (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0));
-                for (icon, portrait) in [("rectangle-vertical", true), ("rectangle-horizontal", false)] {
-                    if icons::button(ui, icon, 24.0, (h > w) == portrait, if portrait { "Portrait" } else { "Landscape" }).clicked() && (h > w) != portrait {
-                        f.insert("width".into(), px_value(h));
-                        f.insert("height".into(), px_value(w));
-                    }
-                }
-            });
-            ui.add_space(4.0);
-            small_label(ui, tl!("Resolution"));
-            ui.horizontal(|ui| {
-                let per_cm = get_s(f, "__resUnit", "in") == "cm";
-                let mut r = if per_cm { ppi / 2.54 } else { ppi };
-                if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", 110.0).changed() {
-                    set_resolution(f, if per_cm { r * 2.54 } else { r });
-                }
-                let mut ru = get_s(f, "__resUnit", "in");
-                if widgets::dropdown(ui, "nd-resunit", &mut ru, &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))], 120.0)
-                {
-                    f.insert("__resUnit".into(), json!(ru));
-                }
-            });
-            ui.add_space(4.0);
-            small_label(ui, tl!("Color Mode"));
-            ui.horizontal(|ui| {
-                let mut mode = get_s(f, "mode", "rgb");
-                if widgets::dropdown(
-                    ui,
-                    "nd-mode",
-                    &mut mode,
-                    &[
-                        ("gray".to_string(), tl!("Grayscale")),
-                        ("rgb".to_string(), tl!("RGB Color")),
-                        ("cmyk".to_string(), tl!("CMYK Color")),
-                        ("lab".to_string(), tl!("Lab Color")),
-                    ],
-                    110.0,
-                ) {
-                    f.insert("mode".into(), json!(mode));
-                }
-                let mut depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
-                let depth_options: Vec<(u64, &str, &str)> = DEPTH_OPTIONS.iter().map(|(bits, label, tooltip)| (*bits, *label, *tooltip)).collect();
-                if widgets::dropdown_with_tooltips(ui, "nd-depth", &mut depth, &depth_options, 120.0) {
-                    f.insert("depth".into(), json!(depth));
-                }
-            });
-            ui.add_space(4.0);
-            small_label(ui, tl!("Background Contents"));
-            let mut bg = get_s(f, "background", "white");
-            let opts = [
-                ("white".to_string(), tl!("White")),
-                ("black".to_string(), tl!("Black")),
-                ("backgroundColor".to_string(), tl!("Background Color")),
-                ("transparent".to_string(), tl!("Transparent")),
-            ];
-            if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, 240.0) {
-                f.insert("background".into(), json!(bg));
-            }
+            details(ui, f);
         });
     });
+}
+
+fn details(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    ui.label(RichText::new(tl!("PRESET DETAILS")).size(11.0).color(t.text_faint));
+    ui.add_space(4.0);
+    let mut name = get_s(f, "name", tl!("Untitled-1"));
+    let editor = egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0));
+    let response = if crate::touch_ui::enabled(ui.ctx()) { ui.add_sized([250.0, 44.0], editor) } else { ui.add(editor) };
+    if response.changed() {
+        f.insert("name".into(), json!(name));
+    }
+    ui.add_space(8.0);
+    let ppi = get_f(f, "resolution", 72.0);
+    let mut unit = get_s(f, "__unit", "px");
+    small_label(ui, tl!("Width"));
+    ui.horizontal(|ui| {
+        let mut w = to_unit(get_f(f, "width", 1920.0), &unit, ppi);
+        if widgets::value_field(ui, &mut w, 0.01..=300_000.0, "", 110.0).changed() {
+            f.insert("width".into(), px_value(from_unit(w, &unit, ppi)));
+            f.remove("__preset");
+        }
+        let opts: Vec<(String, &str)> = UNITS.iter().map(|u| (u.0.to_string(), u.1)).collect();
+        if widgets::dropdown(ui, "nd-unit", &mut unit, &opts, 120.0) {
+            f.insert("__unit".into(), json!(unit));
+        }
+    });
+    small_label(ui, tl!("Height"));
+    ui.horizontal(|ui| {
+        let mut h = to_unit(get_f(f, "height", 1080.0), &unit, ppi);
+        if widgets::value_field(ui, &mut h, 0.01..=300_000.0, "", 110.0).changed() {
+            f.insert("height".into(), px_value(from_unit(h, &unit, ppi)));
+            f.remove("__preset");
+        }
+        ui.add_space(6.0);
+        small_label(ui, tl!("Orientation"));
+        let (w, h) = (get_f(f, "width", 1920.0), get_f(f, "height", 1080.0));
+        for (icon, portrait) in [("rectangle-vertical", true), ("rectangle-horizontal", false)] {
+            if icons::button(ui, icon, crate::touch_ui::height(ui, 24.0), (h > w) == portrait, if portrait { "Portrait" } else { "Landscape" }).clicked()
+                && (h > w) != portrait
+            {
+                f.insert("width".into(), px_value(h));
+                f.insert("height".into(), px_value(w));
+            }
+        }
+    });
+    ui.add_space(4.0);
+    small_label(ui, tl!("Resolution"));
+    ui.horizontal(|ui| {
+        let per_cm = get_s(f, "__resUnit", "in") == "cm";
+        let mut r = if per_cm { ppi / 2.54 } else { ppi };
+        if widgets::value_field(ui, &mut r, 1.0..=30_000.0, "", 110.0).changed() {
+            set_resolution(f, if per_cm { r * 2.54 } else { r });
+        }
+        let mut ru = get_s(f, "__resUnit", "in");
+        if widgets::dropdown(ui, "nd-resunit", &mut ru, &[("in".to_string(), tl!("Pixels/Inch")), ("cm".to_string(), tl!("Pixels/Centimeter"))], 120.0) {
+            f.insert("__resUnit".into(), json!(ru));
+        }
+    });
+    ui.add_space(4.0);
+    small_label(ui, tl!("Color Mode"));
+    ui.horizontal(|ui| {
+        let mut mode = get_s(f, "mode", "rgb");
+        if widgets::dropdown(
+            ui,
+            "nd-mode",
+            &mut mode,
+            &[
+                ("gray".to_string(), tl!("Grayscale")),
+                ("rgb".to_string(), tl!("RGB Color")),
+                ("cmyk".to_string(), tl!("CMYK Color")),
+                ("lab".to_string(), tl!("Lab Color")),
+            ],
+            110.0,
+        ) {
+            f.insert("mode".into(), json!(mode));
+        }
+        let mut depth = f.get("depth").and_then(Value::as_u64).unwrap_or(8);
+        let depth_options: Vec<(u64, &str, &str)> = DEPTH_OPTIONS.iter().map(|(bits, label, tooltip)| (*bits, *label, *tooltip)).collect();
+        if widgets::dropdown_with_tooltips(ui, "nd-depth", &mut depth, &depth_options, 120.0) {
+            f.insert("depth".into(), json!(depth));
+        }
+    });
+    ui.add_space(4.0);
+    small_label(ui, tl!("Background Contents"));
+    let mut bg = get_s(f, "background", "white");
+    let opts = [
+        ("white".to_string(), tl!("White")),
+        ("black".to_string(), tl!("Black")),
+        ("backgroundColor".to_string(), tl!("Background Color")),
+        ("transparent".to_string(), tl!("Transparent")),
+    ];
+    if widgets::dropdown(ui, "nd-bg", &mut bg, &opts, 240.0) {
+        f.insert("background".into(), json!(bg));
+    }
+}
+
+fn touch_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    details(ui, f);
+    ui.separator();
+    let cat = get_s(f, "__category", "Recent");
+    ui.horizontal_wrapped(|ui| {
+        for (name, _) in CATEGORIES {
+            if ui.add_sized([100.0, 44.0], egui::Button::new(tl!(name)).selected(cat == *name)).clicked() {
+                f.insert("__category".into(), json!(name));
+            }
+        }
+    });
+    if let Some((_, presets)) = CATEGORIES.iter().find(|c| c.0 == cat) {
+        for preset in *presets {
+            let label = format!("{} · {} × {}", tl!(preset.0), preset.1, preset.2);
+            if ui.add_sized([ui.available_width(), 48.0], egui::Button::new(label)).clicked() {
+                apply_preset(f, preset);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
