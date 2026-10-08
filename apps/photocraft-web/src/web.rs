@@ -19,9 +19,24 @@ const OPEN_EXTS: &[&str] = &[
 ];
 const CANVAS_ID: &str = "photocraft_canvas";
 
+/// Optional browser frontend. A host can replace workspace chrome while sharing the engine,
+/// import/export services, canvas, and complete dialog lifecycle.
+pub trait BrowserWorkspace {
+    fn attach(&mut self, _canvas: &web_sys::HtmlCanvasElement, _ctx: &egui::Context, _app: &mut PhotocraftApp) {}
+    fn raw_input(&mut self, _raw: &mut egui::RawInput) {}
+    fn logic(&mut self, _app: &mut PhotocraftApp, _ctx: &egui::Context) {}
+    fn ui(&mut self, app: &mut PhotocraftApp, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        eframe::App::ui(app, ui, frame);
+    }
+}
+
 pub fn start() {
+    start_with_workspace(None);
+}
+
+pub fn start_with_workspace(mut workspace: Option<Box<dyn BrowserWorkspace>>) {
     eframe::WebLogger::init(log::LevelFilter::Info).ok();
-    wasm_bindgen_futures::spawn_local(async {
+    wasm_bindgen_futures::spawn_local(async move {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
             return;
@@ -49,6 +64,9 @@ pub fn start() {
                     let inbox: Inbox = Arc::default();
                     let mut app = PhotocraftApp::new(Session::new(), services(inbox.clone(), cc.egui_ctx.clone()));
                     listen_pen(&pen_target, app.stylus.feed.clone());
+                    if let Some(workspace) = workspace.as_mut() {
+                        workspace.attach(&pen_target, &cc.egui_ctx, &mut app);
+                    }
                     app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
                     if let Some(rs) = cc.wgpu_render_state.clone()
                         && !force_cpu
@@ -56,7 +74,7 @@ pub fn start() {
                         log::info!("photocraft-web: wgpu backend {:?}", rs.adapter.get_info().backend);
                         app.set_wgpu(rs);
                     }
-                    Ok(Box::new(WebShell { app, inbox }))
+                    Ok(Box::new(WebShell { app, inbox, workspace }))
                 }),
             )
             .await;
@@ -78,6 +96,10 @@ fn listen_pen(target: &web_sys::HtmlCanvasElement, feed: photocraft_ui_egui::sty
     for kind in ["pointerdown", "pointermove", "pointerup", "pointercancel", "pointerleave"] {
         let feed = feed.clone();
         let cb = Closure::<dyn FnMut(web_sys::PointerEvent)>::new(move |e: web_sys::PointerEvent| {
+            // Fingers must not overwrite the Pencil's pressure while the palm is on the glass.
+            if e.pointer_type() == "touch" {
+                return;
+            }
             let ty = e.type_();
             if ty == "pointerup" && e.pointer_type() == "pen" {
                 return;
@@ -93,7 +115,8 @@ fn listen_pen(target: &web_sys::HtmlCanvasElement, feed: photocraft_ui_egui::sty
                 eraser,
             }));
         });
-        if target.add_event_listener_with_callback(kind, cb.as_ref().unchecked_ref()).is_ok() {
+        // eframe may run logic synchronously on pointerdown: update the feed before its listener.
+        if target.add_event_listener_with_callback_and_bool(kind, cb.as_ref().unchecked_ref(), true).is_ok() {
             cb.forget();
         }
     }
@@ -108,9 +131,17 @@ fn query() -> String {
 struct WebShell {
     app: PhotocraftApp,
     inbox: Inbox,
+    workspace: Option<Box<dyn BrowserWorkspace>>,
 }
 
 impl eframe::App for WebShell {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(workspace) = self.workspace.as_mut() {
+            workspace.raw_input(raw);
+        }
+        self.app.raw_input_hook(ctx, raw);
+    }
+
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         for f in dropped {
@@ -128,10 +159,17 @@ impl eframe::App for WebShell {
             });
         }
         self.app.logic(ctx, frame);
+        if let Some(workspace) = self.workspace.as_mut() {
+            workspace.logic(&mut self.app, ctx);
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        self.app.ui(ui, frame);
+        if let Some(workspace) = self.workspace.as_mut() {
+            workspace.ui(&mut self.app, ui, frame);
+        } else {
+            self.app.ui(ui, frame);
+        }
     }
 }
 

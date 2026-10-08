@@ -126,6 +126,7 @@ mod timeline_ui;
 mod titlebar;
 pub mod tone;
 pub mod tool_feedback;
+pub mod touch_ui;
 pub mod transform_tex;
 pub mod transform_tool;
 pub mod type_panels_ui;
@@ -1034,6 +1035,26 @@ impl eframe::App for PhotocraftApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.ui_with_workspace(ui, |app, ui| {
+            panels::title_bar(app, ui);
+            if app.ui.panels.options_bar {
+                panels::options_bar(app, ui);
+            }
+            if app.ui.panels.status_bar {
+                panels::status_bar(app, ui);
+            }
+            if app.ui.panels.toolbar {
+                panels::toolbar(app, ui);
+            }
+            panels::right_dock(app, ui);
+        });
+    }
+}
+
+impl PhotocraftApp {
+    /// Draw the shared document canvas, dialogs and lifecycle using a host-owned workspace.
+    /// The callback allocates surrounding panels; engine behavior remains in this app.
+    pub fn ui_with_workspace(&mut self, ui: &mut egui::Ui, workspace: impl FnOnce(&mut Self, &mut egui::Ui)) {
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.session.prefs().interface.language));
         // Fonts registered via set_fonts only take effect next frame; named families would panic now.
@@ -1049,19 +1070,7 @@ impl eframe::App for PhotocraftApp {
             let _ = menus::invoke(self, &ctx, "view.screenMode.standard", serde_json::json!({}));
         }
         if chrome {
-            panels::title_bar(self, ui);
-        }
-        if chrome && self.ui.panels.options_bar {
-            panels::options_bar(self, ui);
-        }
-        if chrome && self.ui.panels.status_bar {
-            panels::status_bar(self, ui);
-        }
-        if chrome && self.ui.panels.toolbar {
-            panels::toolbar(self, ui);
-        }
-        if chrome {
-            panels::right_dock(self, ui);
+            workspace(self, ui);
         }
         let t = theme::Tokens::get(&ctx);
         let backdrop = if chrome { prefs_ui::pasteboard_color(self).unwrap_or(t.canvas) } else { egui::Color32::BLACK };
