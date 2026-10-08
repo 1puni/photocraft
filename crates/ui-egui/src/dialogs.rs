@@ -201,9 +201,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
             };
             if touch {
+                let body_height = (viewport.y - 180.0).max(120.0);
                 egui::ScrollArea::both()
                     .id_salt(("touch-dialog-body", d.id))
-                    .max_height((viewport.y - 180.0).max(120.0))
+                    .max_height(body_height)
+                    .min_scrolled_height(body_height)
                     .auto_shrink([false, true])
                     .show(ui, &mut body);
             } else {
@@ -372,6 +374,103 @@ pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn touch_export_and_layer_styles_fit_without_horizontal_scrolling() {
+        for size in [egui::vec2(834.0, 1066.0), egui::vec2(507.0, 768.0)] {
+            for page in std::iter::once("export").chain(crate::layer_style::KINDS.iter().map(|(kind, _)| *kind)) {
+                let ctx = egui::Context::default();
+                PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+                crate::touch_ui::set_enabled(&ctx, true);
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+                app.run("file.new", json!({"width":32,"height":32})).unwrap();
+                if page == "export" {
+                    crate::export_dialog::open(&mut app).unwrap();
+                } else {
+                    crate::layer_style::open(&mut app, Some(page)).unwrap();
+                }
+                let mut fields = app.ui.dialogs[0].fields.clone();
+                let mut body_width = 0.0;
+                for _ in 0..4 {
+                    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+                    ctx.run_ui(raw, |ui| {
+                        ui.set_width(size.x - 64.0);
+                        body_width = ui
+                            .scope(|ui| {
+                                if page == "export" {
+                                    crate::export_dialog::body(&mut app, ui, &mut fields);
+                                } else {
+                                    crate::layer_style::body(&mut app, ui, &mut fields);
+                                }
+                            })
+                            .response
+                            .rect
+                            .width();
+                    })
+                    .textures_delta
+                    .clear();
+                }
+                assert!(body_width <= size.x - 64.0 + 1.0, "{page} on {size:?}: content width {body_width}");
+                for _ in 0..4 {
+                    let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+                    ctx.run_ui(raw, |ui| show(&mut app, ui.ctx())).textures_delta.clear();
+                }
+                for rect in rects(&ctx) {
+                    assert!(rect.width() <= size.x && rect.height() <= size.y, "{page} on {size:?}: {rect:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn touch_layer_style_supports_cancel_apply_and_undo() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":32,"height":32})).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(507.0, 768.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        crate::touch_ui::set_enabled(&h.ctx, true);
+        crate::layer_style::open(h.state_mut(), Some(crate::layer_style::BLENDING)).unwrap();
+        h.run_steps(3);
+        let before = h.get_by_value("Add").rect();
+        h.get_by_value("Add").click();
+        h.run_steps(3);
+        assert!(
+            egui::Popup::is_any_open(&h.ctx),
+            "effect menu must open: before {before:?}, after {:?}, pointer {:?}",
+            h.get_by_value("Add").rect(),
+            h.ctx.pointer_latest_pos()
+        );
+        h.get_by_label("Stroke").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.dialogs[0].fields["effects"].as_array().unwrap().len(), 1);
+        let st = h.state().session.active().unwrap();
+        assert!(st.doc.layer(st.active_layer.unwrap()).unwrap().effects.items.is_empty());
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty());
+        let st = h.state().session.active().unwrap();
+        assert!(st.doc.layer(st.active_layer.unwrap()).unwrap().effects.items.is_empty());
+        crate::layer_style::open(h.state_mut(), Some(crate::layer_style::BLENDING)).unwrap();
+        h.run_steps(3);
+        h.get_by_value("Add").click();
+        h.run_steps(3);
+        h.get_by_label("Stroke").click();
+        h.run_steps(3);
+        h.get_by_label("Enabled").click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.dialogs[0].fields["effects"][0]["on"], json!(false));
+        h.get_by_label("Enabled").click();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().ui.dialogs.is_empty());
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().effects.items.len(), 1);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        let st = h.state().session.active().unwrap();
+        assert!(st.doc.layer(st.active_layer.unwrap()).unwrap().effects.items.is_empty());
+    }
 
     #[test]
     fn touch_new_document_stays_inside_portrait_and_split_view() {

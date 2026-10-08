@@ -657,45 +657,28 @@ fn save_new_style(app: &mut PhotocraftApp, f: &Map<String, Value>) {
 /// Dialog body (left list, right parameters).
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
+    let touch = crate::touch_ui::enabled(ui.ctx());
+    if touch {
+        touch_effect_selector(ui, f);
+    }
     let selected = f.get("selected").and_then(Value::as_str).unwrap_or("dropShadow").to_string();
     let mut style_click: Option<String> = None;
     let mut new_style = false;
     let invalid = validate_params(f).err();
-    ui.horizontal_top(|ui| {
+    let width = ui.available_width();
+    let layout = if touch { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    ui.with_layout(layout, |ui| {
         // Left: effect list.
-        ui.vertical(|ui| {
-            ui.set_width(190.0);
-            // Styles & Blending Options rows (matching the effect row layout & padding).
-            for (id, label) in [(STYLES_PAGE, "Styles"), (BLENDING, "Blending Options")] {
-                let is_sel = selected == id;
-                let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
-                if is_sel {
-                    ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
-                } else if resp.hovered() {
-                    ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
-                }
-                ui.painter().text(
-                    rect.left_center() + vec2(28.0, 0.0),
-                    egui::Align2::LEFT_CENTER,
-                    tl!(label),
-                    egui::FontId::proportional(12.5),
-                    if is_sel { t.text } else { t.text_dim },
-                );
-                if resp.clicked() {
-                    f.insert("selected".into(), json!(id));
-                }
-            }
-            ui.add_space(4.0);
-            for &(kind, label) in KINDS {
-                let ids: Vec<String> = effects_of(f)
-                    .iter()
-                    .filter(|e| e.get("kind").and_then(Value::as_str) == Some(kind))
-                    .filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_string))
-                    .collect();
-                if ids.is_empty() {
-                    // The effect isn't on the layer: a greyed row that adds it.
+        if !touch {
+            ui.vertical(|ui| {
+                ui.set_width(190.0);
+                // Styles & Blending Options rows (matching the effect row layout & padding).
+                for (id, label) in [(STYLES_PAGE, "Styles"), (BLENDING, "Blending Options")] {
+                    let is_sel = selected == id;
                     let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
-                    if resp.hovered() {
+                    if is_sel {
+                        ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
+                    } else if resp.hovered() {
                         ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
                     }
                     ui.painter().text(
@@ -703,74 +686,101 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                         egui::Align2::LEFT_CENTER,
                         tl!(label),
                         egui::FontId::proportional(12.5),
-                        t.text_faint,
+                        if is_sel { t.text } else { t.text_dim },
                     );
                     if resp.clicked() {
-                        add_instance(f, kind);
+                        f.insert("selected".into(), json!(id));
                     }
-                    continue;
                 }
-                let count = ids.len();
-                for id in &ids {
-                    let Some(e) = entry(f, id) else { continue };
-                    let kind_label = KINDS.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or(label);
-                    let mut on = e.get("on").and_then(Value::as_bool).unwrap_or(false);
-                    let is_sel = id == &selected;
-                    let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
-                    if is_sel {
-                        ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
-                    } else if resp.hovered() {
-                        ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
-                    }
-                    let cb = egui::Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(14.0, 14.0));
-                    let cresp = ui.interact(cb, ui.id().with(("fxcb", kind, id)), Sense::click());
-                    if on {
-                        ui.painter().rect_filled(cb, 2.0, t.accent);
-                        ui.painter().line_segment([cb.left_center() + vec2(3.0, 0.5), cb.center_bottom() + vec2(-1.0, -3.5)], Stroke::new(1.8, Color32::WHITE));
-                        ui.painter().line_segment([cb.center_bottom() + vec2(-1.0, -3.5), cb.right_top() + vec2(-3.0, 3.5)], Stroke::new(1.8, Color32::WHITE));
-                    } else {
-                        ui.painter().rect_stroke(cb, 2.0, Stroke::new(1.5, t.text_faint), StrokeKind::Inside);
-                    }
-                    ui.painter().text(
-                        rect.left_center() + vec2(28.0, 0.0),
-                        egui::Align2::LEFT_CENTER,
-                        tl!(kind_label),
-                        egui::FontId::proportional(12.5),
-                        if on || is_sel { t.text } else { t.text_dim },
-                    );
-                    // + adds another instance; − removes one once there are several.
-                    if multi(kind) {
-                        let btn = |ui: &egui::Ui, at: egui::Pos2, glyph: &str, tag: &str| {
-                            let r = egui::Rect::from_center_size(at, vec2(18.0, 18.0));
-                            let hresp = ui.interact(r, ui.id().with(("fxbtn", tag, id)), Sense::click());
-                            let col = if hresp.hovered() { t.accent } else { t.text_faint };
-                            ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(13.0), col);
-                            hresp.clicked()
-                        };
-                        if count > 1 && btn(ui, rect.right_center() - vec2(22.0, 0.0), "\u{2212}", "minus") {
-                            remove_instance(f, id);
-                            continue;
+                ui.add_space(4.0);
+                for &(kind, label) in KINDS {
+                    let ids: Vec<String> = effects_of(f)
+                        .iter()
+                        .filter(|e| e.get("kind").and_then(Value::as_str) == Some(kind))
+                        .filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_string))
+                        .collect();
+                    if ids.is_empty() {
+                        // The effect isn't on the layer: a greyed row that adds it.
+                        let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
+                        if resp.hovered() {
+                            ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
                         }
-                        if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus") {
+                        ui.painter().text(
+                            rect.left_center() + vec2(28.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            tl!(label),
+                            egui::FontId::proportional(12.5),
+                            t.text_faint,
+                        );
+                        if resp.clicked() {
                             add_instance(f, kind);
                         }
+                        continue;
                     }
-                    if cresp.clicked() {
-                        on = !on;
-                        if let Some(e) = entry_mut(f, id) {
-                            e["on"] = json!(on);
+                    let count = ids.len();
+                    for id in &ids {
+                        let Some(e) = entry(f, id) else { continue };
+                        let kind_label = KINDS.iter().find(|k| k.0 == kind).map(|k| k.1).unwrap_or(label);
+                        let mut on = e.get("on").and_then(Value::as_bool).unwrap_or(false);
+                        let is_sel = id == &selected;
+                        let (rect, resp) = ui.allocate_exact_size(vec2(190.0, 26.0), Sense::click());
+                        if is_sel {
+                            ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
+                        } else if resp.hovered() {
+                            ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
                         }
-                        f.insert("selected".into(), json!(id));
-                    } else if resp.clicked() {
-                        f.insert("selected".into(), json!(id));
+                        let cb = egui::Rect::from_min_size(rect.min + vec2(6.0, 6.0), vec2(14.0, 14.0));
+                        let cresp = ui.interact(cb, ui.id().with(("fxcb", kind, id)), Sense::click());
+                        if on {
+                            ui.painter().rect_filled(cb, 2.0, t.accent);
+                            ui.painter()
+                                .line_segment([cb.left_center() + vec2(3.0, 0.5), cb.center_bottom() + vec2(-1.0, -3.5)], Stroke::new(1.8, Color32::WHITE));
+                            ui.painter()
+                                .line_segment([cb.center_bottom() + vec2(-1.0, -3.5), cb.right_top() + vec2(-3.0, 3.5)], Stroke::new(1.8, Color32::WHITE));
+                        } else {
+                            ui.painter().rect_stroke(cb, 2.0, Stroke::new(1.5, t.text_faint), StrokeKind::Inside);
+                        }
+                        ui.painter().text(
+                            rect.left_center() + vec2(28.0, 0.0),
+                            egui::Align2::LEFT_CENTER,
+                            tl!(kind_label),
+                            egui::FontId::proportional(12.5),
+                            if on || is_sel { t.text } else { t.text_dim },
+                        );
+                        // + adds another instance; − removes one once there are several.
+                        if multi(kind) {
+                            let btn = |ui: &egui::Ui, at: egui::Pos2, glyph: &str, tag: &str| {
+                                let r = egui::Rect::from_center_size(at, vec2(18.0, 18.0));
+                                let hresp = ui.interact(r, ui.id().with(("fxbtn", tag, id)), Sense::click());
+                                let col = if hresp.hovered() { t.accent } else { t.text_faint };
+                                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(13.0), col);
+                                hresp.clicked()
+                            };
+                            if count > 1 && btn(ui, rect.right_center() - vec2(22.0, 0.0), "\u{2212}", "minus") {
+                                remove_instance(f, id);
+                                continue;
+                            }
+                            if btn(ui, rect.right_center() - vec2(8.0, 0.0), "+", "plus") {
+                                add_instance(f, kind);
+                            }
+                        }
+                        if cresp.clicked() {
+                            on = !on;
+                            if let Some(e) = entry_mut(f, id) {
+                                e["on"] = json!(on);
+                            }
+                            f.insert("selected".into(), json!(id));
+                        } else if resp.clicked() {
+                            f.insert("selected".into(), json!(id));
+                        }
                     }
                 }
-            }
-        });
-        widgets::vline(ui, 330.0);
+            });
+            widgets::vline(ui, 330.0);
+        }
         // Right: parameters of the selected page.
         ui.vertical(|ui| {
-            ui.set_width(330.0);
+            ui.set_width(if touch { width } else { 330.0 });
             if selected == STYLES_PAGE {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!("Styles")).font(crate::theme::semibold(14.0)).color(t.text));
@@ -790,7 +800,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
                             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                             for st in &group.items {
                                 let tex = crate::preset_panels::style_texture(app, &ctx, st);
-                                let (rect, resp) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
+                                let side = crate::touch_ui::height(ui, 32.0);
+                                let (rect, resp) = ui.allocate_exact_size(vec2(side, side), Sense::click());
                                 ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                                 let (stroke, kind) = if resp.hovered() {
                                     (Stroke::new(1.5, t.accent), egui::StrokeKind::Outside)
@@ -955,6 +966,46 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     if new_style {
         save_new_style(app, f);
     }
+}
+
+/// Touch navigation keeps effect selection and instance actions above the full-width settings.
+/// Pending edits remain in the same dialog fields; Cancel and preview use the desktop path.
+fn touch_effect_selector(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let mut selected = f.get("selected").and_then(Value::as_str).unwrap_or(BLENDING).to_owned();
+    let mut pages = vec![(STYLES_PAGE.to_owned(), tl!("Styles").to_owned()), (BLENDING.to_owned(), tl!("Blending Options").to_owned())];
+    for (index, effect) in effects_of(f).iter().enumerate() {
+        let Some(id) = effect.get("id").and_then(Value::as_str) else { continue };
+        let kind = effect.get("kind").and_then(Value::as_str).unwrap_or_default();
+        let label = KINDS.iter().find(|(key, _)| *key == kind).map_or(kind, |(_, label)| *label);
+        pages.push((id.to_owned(), format!("{} · {}", tl!(label), index + 1)));
+    }
+    let options: Vec<_> = pages.iter().map(|(id, label)| (id.clone(), label.as_str())).collect();
+    if widgets::dropdown(ui, "touch-effect-page", &mut selected, &options, ui.available_width()) {
+        f.insert("selected".into(), json!(selected));
+    }
+    ui.horizontal_wrapped(|ui| {
+        egui::ComboBox::from_id_salt("touch-add-effect").selected_text(tl!("Add")).show_ui(ui, |ui| {
+            for &(kind, label) in KINDS {
+                let existing = effects_of(f).iter().find(|effect| effect.get("kind").and_then(Value::as_str) == Some(kind));
+                if ui.add_enabled(existing.is_none() || multi(kind), egui::Button::new(tl!(label)).min_size(vec2(180.0, 44.0))).clicked() {
+                    add_instance(f, kind);
+                    ui.close();
+                }
+            }
+        });
+        if let Some(effect) = entry(f, &selected) {
+            let mut on = effect.get("on").and_then(Value::as_bool).unwrap_or(false);
+            if widgets::checkbox(ui, &mut on, "Enabled").changed()
+                && let Some(effect) = entry_mut(f, &selected)
+            {
+                effect["on"] = json!(on);
+            }
+            if widgets::secondary_button(ui, tl!("Remove"), 90.0).clicked() {
+                remove_instance(f, &selected);
+            }
+        }
+    });
+    widgets::hairline(ui);
 }
 
 fn parse_hex(s: &str) -> Color32 {
