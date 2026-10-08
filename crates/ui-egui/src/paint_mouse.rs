@@ -450,4 +450,46 @@ mod tests {
         press(&mut h, end, PointerButton::Primary, false);
         assert_committed_points(&h, &queued);
     }
+
+    #[test]
+    fn one_frame_preserves_each_pen_points_pressure_and_tilt() {
+        let mut h = harness(None);
+        let a = h.state().last_canvas_rect.center() - vec2(90.0, 0.0);
+        h.event(egui::Event::PointerMoved(a));
+        h.run_steps(1);
+        press(&mut h, a, PointerButton::Primary, true);
+        h.event(egui::Event::PointerMoved(a + vec2(20.0, 0.0)));
+        h.run_steps(1);
+        let samples = [(0.15f32, 10.0f32), (0.5, 35.0), (0.9, 60.0)];
+        let mut end = a;
+        for (i, (pressure, tilt_x)) in samples.iter().copied().enumerate() {
+            end = a + vec2(30.0 + i as f32 * 12.0, 0.0);
+            h.state().stylus.feed.push(end, crate::stylus::PenSample { pressure, tilt_x, ..Default::default() });
+            h.input_mut().events.push(egui::Event::PointerMoved(end));
+        }
+        h.run_steps(1);
+        press(&mut h, end, PointerButton::Primary, false);
+        let strokes = strokes(&h);
+        assert_eq!(strokes.len(), 1);
+        let points = strokes[0]["points"].as_array().unwrap();
+        for (pressure, tilt) in samples {
+            assert!(
+                points.iter().any(|point| point[2].as_f64() == Some(pressure as f64) && point[3].as_f64() == Some(tilt as f64)),
+                "missing {pressure}/{tilt} in {points:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pen_tap_keeps_its_pressure() {
+        let mut h = harness(None);
+        let p = h.state().last_canvas_rect.center();
+        h.state().stylus.feed.push(p, crate::stylus::PenSample { pressure: 0.2, ..Default::default() });
+        h.event(egui::Event::PointerMoved(p));
+        press(&mut h, p, PointerButton::Primary, true);
+        press(&mut h, p, PointerButton::Primary, false);
+        let strokes = strokes(&h);
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0]["points"][0][2].as_f64(), Some(0.2f32 as f64));
+    }
 }

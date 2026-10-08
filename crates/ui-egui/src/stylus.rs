@@ -26,6 +26,7 @@
 //! Automation simulates a pen with `ui.pointer` events carrying `pressure`, `tiltX`, `tiltY`
 //! and `rotation`.
 
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
 /// One stylus reading. Tilt is in degrees (-90..90, W3C Pointer Events convention), rotation in
@@ -64,16 +65,57 @@ impl PenSample {
 /// Shared slot a platform backend writes the current pen sample into (`None` = no pen down).
 /// Cloning shares the slot.
 #[derive(Clone, Debug, Default)]
-pub struct StylusFeed(Arc<Mutex<Option<PenSample>>>);
+pub struct StylusFeed(Arc<Mutex<FeedState>>);
+
+#[derive(Clone, Debug, Default)]
+struct FeedState {
+    current: Option<PenSample>,
+    points: VecDeque<(egui::Pos2, PenSample)>,
+}
 
 impl StylusFeed {
     pub fn set(&self, s: Option<PenSample>) {
         if let Ok(mut g) = self.0.lock() {
-            *g = s.map(PenSample::sanitized);
+            g.current = s.map(PenSample::sanitized);
+            if s.is_none() {
+                g.points.clear();
+            }
         }
     }
     pub fn get(&self) -> Option<PenSample> {
-        self.0.lock().ok().and_then(|g| *g)
+        self.0.lock().ok().and_then(|g| g.current)
+    }
+    /// Position-aligned samples from browser Pointer Events, in egui screen points.
+    /// Bounded even when a platform sends input while rendering is suspended.
+    pub fn push(&self, position: egui::Pos2, sample: PenSample) {
+        if !position.is_finite() {
+            return;
+        }
+        if let Ok(mut g) = self.0.lock() {
+            if g.points.len() >= 4096 {
+                g.points.pop_front();
+            }
+            let sample = sample.sanitized();
+            g.current = Some(sample);
+            g.points.push_back((position, sample));
+        }
+    }
+    pub fn clear_points(&self) {
+        if let Ok(mut g) = self.0.lock() {
+            g.points.clear();
+        }
+    }
+    /// Select the matching sample immediately before a tool consumes that movement.
+    /// Native backends without position samples continue using the current platform feed.
+    pub fn use_at(&self, position: egui::Pos2) {
+        if let Ok(mut g) = self.0.lock()
+            && let Some(index) = g.points.iter().position(|(p, _)| p.distance_sq(position) < 0.01)
+        {
+            if let Some((_, sample)) = g.points.get(index).copied() {
+                g.current = Some(sample);
+            }
+            g.points.drain(..=index);
+        }
     }
 }
 
@@ -202,6 +244,33 @@ impl Stylus {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn batched_points_keep_their_own_pressure_and_tilt() {
+        let feed = super::StylusFeed::default();
+        for (x, pressure, tilt) in [(10.0, 0.1, 15.0), (20.0, 0.5, 35.0), (30.0, 0.9, 60.0)] {
+            feed.push(egui::pos2(x, 2.0), super::PenSample { pressure, tilt_x: tilt, ..Default::default() });
+        }
+        for (x, pressure, tilt) in [(10.0, 0.1, 15.0), (20.0, 0.5, 35.0), (30.0, 0.9, 60.0)] {
+            feed.use_at(egui::pos2(x, 2.0));
+            let sample = feed.get().unwrap();
+            assert_eq!((sample.pressure, sample.tilt_x), (pressure, tilt));
+        }
+        feed.set(None);
+        feed.use_at(egui::pos2(10.0, 2.0));
+        assert!(feed.get().is_none());
+    }
+
+    #[test]
+    fn sample_queue_is_bounded_and_ignores_nonfinite_positions() {
+        let feed = super::StylusFeed::default();
+        for i in 0..5000 {
+            feed.push(egui::pos2(i as f32, 0.0), super::PenSample::default());
+        }
+        feed.push(egui::pos2(f32::NAN, 0.0), super::PenSample::default());
+        assert_eq!(feed.0.lock().unwrap().points.len(), 4096);
+        feed.clear_points();
+        assert!(feed.0.lock().unwrap().points.is_empty());
+    }
     use super::*;
 
     fn touch(phase: egui::TouchPhase, force: Option<f32>) -> egui::Event {
