@@ -678,6 +678,23 @@ mod tests {
     }
 
     #[test]
+    fn attaching_transport_preserves_live_document_and_dispatches_requests() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        app.run("file.new", json!({"width": 37, "height": 23})).unwrap();
+        let before = photocraft_engine::inspect::session(&app.session);
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.attach_control(rx);
+        let (request, reply) = ControlRequest::new("ui.inspect", json!({}));
+        tx.send(request).unwrap();
+        app.drain_control(&ctx);
+        let result = reply.try_recv().unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(result["result"]["session"], before);
+        assert_eq!(photocraft_engine::inspect::session(&app.session), before);
+    }
+
+    #[test]
     fn right_pointer_opens_agent_visible_selection_menu() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();

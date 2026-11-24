@@ -596,8 +596,13 @@ impl PhotocraftApp {
 
     /// Attach a control channel (requests arrive from a transport thread: TCP, stdin, tests).
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
-        self.control_rx = Some(rx);
+        self.attach_control(rx);
         self
+    }
+
+    /// Attach a transport after construction without replacing the live document session.
+    pub fn attach_control(&mut self, rx: Receiver<ControlRequest>) {
+        self.control_rx = Some(rx);
     }
 
     /// Run an engine command, reporting errors in the status bar.
