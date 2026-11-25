@@ -77,6 +77,55 @@ pub fn handle_tolerance(app: &PhotocraftApp) -> f64 {
     HANDLE_PX / app.current_zoom().max(0.01) as f64
 }
 
+/// A visible rotation target, in screen points. Prefer outside the top edge, then
+/// another edge with room. At a tightly fitted canvas, tuck it inside the box;
+/// its explicit hit target still rotates instead of moving the layer.
+pub fn rotation_control(quad: [Pos2; 4], viewport: egui::Rect) -> Option<(Pos2, Pos2)> {
+    let safe = viewport.shrink(HANDLE_PX as f32);
+    if !safe.is_positive() {
+        return None;
+    }
+    let center = quad[0].lerp(quad[2], 0.5).lerp(quad[1].lerp(quad[3], 0.5), 0.5);
+    let mids = std::array::from_fn::<_, 4, _>(|i| quad[i].lerp(quad[(i + 1) % 4], 0.5));
+    for direction in [1.0, -1.0] {
+        for anchor in mids {
+            let delta = anchor - center;
+            if delta.length_sq() < 1.0 {
+                continue;
+            }
+            let knob = anchor + delta.normalized() * (32.0 * direction);
+            if safe.contains(knob) && quad.iter().chain(mids.iter()).chain(std::iter::once(&center)).all(|p| p.distance(knob) > 2.0 * HANDLE_PX as f32) {
+                return Some((anchor, knob));
+            }
+        }
+    }
+    None
+}
+
+/// Draw the same rotation affordance for idle Move controls and active transforms.
+pub fn draw_rotation_control(painter: &egui::Painter, quad: [Pos2; 4], viewport: egui::Rect) {
+    let Some((anchor, knob)) = rotation_control(quad, viewport) else { return };
+    let t = crate::theme::Tokens::get(painter.ctx());
+    painter.line_segment([anchor, knob], Stroke::new(1.0, t.accent));
+    painter.circle_filled(knob, 10.0, t.primary_bg);
+    painter.circle_stroke(knob, 10.0, Stroke::new(1.0, t.primary_text));
+    let arc: Vec<Pos2> = (0..=16)
+        .map(|i| {
+            let angle = std::f32::consts::PI * (0.2 + i as f32 * 1.5 / 16.0);
+            knob + vec2(angle.cos(), angle.sin()) * 5.0
+        })
+        .collect();
+    painter.add(egui::Shape::line(arc, Stroke::new(1.3, t.primary_text)));
+    painter.add(egui::Shape::line(vec![knob + vec2(-1.0, -5.5), knob + vec2(3.0, -4.0), knob + vec2(1.5, 0.0)], Stroke::new(1.3, t.primary_text)));
+}
+
+fn rotation_control_hit(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    let Some(t) = app.ui.transform.as_ref().filter(|t| t.warp.is_none() && t.mode != TransformMode::Distort) else { return false };
+    let Some(xf) = ViewXform::active(app) else { return false };
+    let quad = t.quad.map(|q| xf.to_screen(q[0] as f32, q[1] as f32));
+    rotation_control(quad, xf.rect).is_some_and(|(_, knob)| knob.distance(xf.to_screen(p[0] as f32, p[1] as f32)) <= HANDLE_PX as f32)
+}
+
 /// The box as one undo step restores it.
 #[derive(Clone, Debug, PartialEq)]
 struct Step {
@@ -667,12 +716,17 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         warp_pointer(app, ev, tol, mods);
         return true;
     }
+    let on_rotation = match ev {
+        ToolEvent::Down { x, y, .. } => rotation_control_hit(app, [x, y]),
+        _ => false,
+    };
     let Some(pv) = app.transform_preview.as_mut() else { return false };
     match ev {
         ToolEvent::Down { x, y, .. } => {
-            let mut h = hit(&t, [x, y], tol);
+            let mut h = if on_rotation { Hit::Outside } else { hit(&t, [x, y], tol) };
             // ⌥-click away from the handles moves the reference point there (and drags it).
             if mods.alt
+                && !on_rotation
                 && matches!(h, Hit::Inside | Hit::Outside)
                 && let Some(s) = app.ui.transform.as_mut()
             {
@@ -1071,7 +1125,7 @@ pub fn cursor(app: &PhotocraftApp, p: [f64; 2], alt: bool) -> Option<CursorIcon>
         }
         return Some(if w.style != WarpStyle::Custom || warp_hit(w, p, tol).is_some() { CursorIcon::Crosshair } else { CursorIcon::Default });
     }
-    let h = hit(t, p, tol);
+    let h = if rotation_control_hit(app, p) { Hit::Outside } else { hit(t, p, tol) };
     if !distort_allows(t.mode, h) {
         return Some(CursorIcon::Default);
     }
@@ -1124,6 +1178,9 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         painter.add(mesh);
     }
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
+    if t.mode != TransformMode::Distort {
+        draw_rotation_control(painter, t.quad.map(scr), xf.rect);
+    }
     let pts: Vec<Pos2> = t.quad.iter().map(|q| scr(*q)).collect();
     painter.add(egui::Shape::closed_line(pts.clone(), Stroke::new(1.0, accent)));
     let mids: Vec<Pos2> = (0..4).map(|i| pts[i].lerp(pts[(i + 1) % 4], 0.5)).collect();

@@ -2252,7 +2252,11 @@ fn transform_controls_rect(app: &PhotocraftApp, xf: &ViewXform) -> Option<Rect> 
 
 /// A visible handle starts scaling; the narrow band just outside the box starts rotation.
 /// The interior stays the normal Move-tool drag target.
-fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
+fn transform_controls_hit(r: Rect, p: Pos2, viewport: Rect) -> bool {
+    let quad = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()];
+    if crate::transform_tool::rotation_control(quad, viewport).is_some_and(|(_, knob)| knob.distance(p) <= crate::transform_tool::HANDLE_PX as f32) {
+        return true;
+    }
     let handles = [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()];
     let grab = crate::transform_tool::HANDLE_PX as f32;
     handles.iter().any(|h| h.distance(p) <= grab) || (r.expand(18.0).contains(p) && !r.expand(5.0).contains(p))
@@ -2261,7 +2265,7 @@ fn transform_controls_hit(r: Rect, p: Pos2) -> bool {
 /// Enter the existing Free Transform session when a Move-tool transform control is pressed.
 fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf: &ViewXform, p: Pos2) -> bool {
     let Some(r) = transform_controls_rect(app, xf) else { return false };
-    if !transform_controls_hit(r, p) {
+    if !transform_controls_hit(r, p, xf.rect) {
         return false;
     }
     match crate::transform_tool::begin(app, ctx) {
@@ -2276,6 +2280,7 @@ fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::Context, xf:
 /// Move tool › Show Transform Controls: the active layer's bounding box with its eight handles.
 fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     let Some(r) = transform_controls_rect(app, xf) else { return };
+    crate::transform_tool::draw_rotation_control(painter, [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], xf.rect);
     let accent = crate::theme::Tokens::get(painter.ctx()).accent;
     painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);
     for p in [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()] {
@@ -3473,7 +3478,7 @@ mod transform_controls_tests {
 
         let xf = ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false };
         let r = transform_controls_rect(&app, &xf).expect("shape layers have transform bounds");
-        assert!(transform_controls_hit(r, r.right_bottom()));
+        assert!(transform_controls_hit(r, r.right_bottom(), xf.rect));
 
         let ctx = egui::Context::default();
         assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
@@ -3484,9 +3489,10 @@ mod transform_controls_tests {
     #[test]
     fn transform_control_hit_keeps_move_interior_free_and_has_rotation_band() {
         let r = Rect::from_min_max(pos2(20.0, 30.0), pos2(100.0, 70.0));
-        assert!(transform_controls_hit(r, r.left_top()));
-        assert!(transform_controls_hit(r, pos2(60.0, 18.0)));
-        assert!(!transform_controls_hit(r, r.center()));
-        assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
+        let viewport = Rect::from_min_max(pos2(-100.0, -100.0), pos2(200.0, 200.0));
+        assert!(transform_controls_hit(r, r.left_top(), viewport));
+        assert!(transform_controls_hit(r, pos2(60.0, 18.0), viewport));
+        assert!(!transform_controls_hit(r, r.center(), viewport));
+        assert!(!transform_controls_hit(r, pos2(150.0, 4.0), viewport));
     }
 }

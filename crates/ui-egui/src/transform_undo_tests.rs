@@ -210,3 +210,59 @@ fn the_first_drag_from_the_move_tools_controls_undoes() {
     key(&mut h, Modifiers::COMMAND, Key::Z);
     assert!(close(quad(&h), [[100.0, 100.0], [200.0, 100.0], [200.0, 160.0], [100.0, 160.0]]), "{:?}", quad(&h));
 }
+
+#[test]
+fn visible_rotation_control_starts_rotates_and_undoes_from_move_or_transform() {
+    for (via_controls, tight) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut h = harness();
+        if tight {
+            let view = &mut h.state_mut().ui.views[0];
+            view.zoom = 10.;
+            view.center = [150., 130.];
+            h.run_steps(2);
+        }
+        let original_doc = h.state().session.active().unwrap().doc.clone();
+        if via_controls {
+            h.state_mut().ui.tool_options.move_show_transform = true;
+            h.run_steps(2);
+        } else {
+            begin(&mut h);
+        }
+        let q0 = [[100., 100.], [200., 100.], [200., 160.], [100., 160.]];
+        let xf = ViewXform::active(h.state()).unwrap();
+        let (_, knob) = crate::transform_tool::rotation_control(q0.map(|q| xf.to_screen(q[0] as f32, q[1] as f32)), xf.rect).unwrap();
+        let start = xf.to_doc(knob);
+        let pivot = [150., 130.];
+        let end = [pivot[0] - (start[1] - pivot[1]), pivot[1] + (start[0] - pivot[0])];
+        drag(&mut h, start, end);
+        let q1 = quad(&h);
+        assert!((q1[1][0] - q1[0][0]).abs() < 1e-4, "rotated 90°, not resized: {q1:?}");
+        assert!((q1[1][1] - q1[0][1] - 100.).abs() < 1e-4);
+        key(&mut h, Modifiers::COMMAND, Key::Z);
+        assert!(close(quad(&h), q0));
+        assert!(execute(&mut h, "edit.redo"));
+        assert!(close(quad(&h), q1));
+        key(&mut h, Modifiers::NONE, Key::Enter);
+        assert!(h.state().ui.transform.is_none());
+        assert_ne!(h.state().session.active().unwrap().doc, original_doc);
+        assert!(execute(&mut h, "edit.undo"));
+        assert_eq!(h.state().session.active().unwrap().doc, original_doc);
+    }
+}
+
+#[test]
+fn rotation_control_keeps_screen_size_and_fits_tight_viewports() {
+    use egui::{Rect, pos2};
+    let viewport = Rect::from_min_max(Pos2::ZERO, pos2(400., 300.));
+    for scale in [0.25, 1., 4.] {
+        let q = [[-30., -20.], [30., -20.], [30., 20.], [-30., 20.]].map(|p| pos2(200. + p[0] * scale, 150. + p[1] * scale));
+        let (anchor, knob) = crate::transform_tool::rotation_control(q, viewport).unwrap();
+        assert!((anchor.distance(knob) - 32.).abs() < 0.01);
+        assert!(viewport.shrink(12.).contains(knob));
+    }
+    let q = [pos2(4., 4.), pos2(396., 4.), pos2(396., 296.), pos2(4., 296.)];
+    let (_, knob) = crate::transform_tool::rotation_control(q, viewport).unwrap();
+    assert!(viewport.shrink(12.).contains(knob));
+    assert!(knob.y > 4., "falls inside when there is no outside room");
+    assert!(crate::transform_tool::rotation_control(q, Rect::from_min_size(Pos2::ZERO, vec2(20., 20.))).is_none());
+}
