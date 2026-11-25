@@ -157,3 +157,9 @@ to another edge or inside a tightly fitted box when outside space is unavailable
 The knob uses the existing rotate gesture and history; an inside knob rotates
 rather than moving pixels. Distort and Warp omit it because their gestures do
 not rotate the box. Resize handles retain their existing hit areas.
+
+Crop workspaces can use `crop_ui::set_ratio` to preview a preset immediately in
+an existing crop frame. The preview fits inside the frame without enlarging the
+canvas; trying different presets shares the same basis until a gesture or
+external frame change, avoiding cumulative shrink. Free releases the constraint.
+Only the usual crop commit changes pixels/history.
